@@ -53,10 +53,7 @@ type pbkdfTestResponse struct {
 
 // pbkdf implements an ACVP algorithm by making requests to the
 // subprocess to generate PBKDF2 keys.
-type pbkdf struct {
-	// hmacs are the supported HMAC KDFs.
-	hmacs map[string]bool
-}
+type pbkdf struct{}
 
 func (p *pbkdf) Process(vectorSet []byte, m Transactable) (any, error) {
 	var parsed pbkdfTestVectorSet
@@ -71,10 +68,6 @@ func (p *pbkdf) Process(vectorSet []byte, m Transactable) (any, error) {
 	for _, group := range parsed.Groups {
 		group := group
 
-		if _, ok := p.hmacs[group.HmacAlgo]; !ok {
-			return nil, fmt.Errorf("HMAC %q in test group %d not supported", group.HmacAlgo, group.ID)
-		}
-
 		// "There is only one test type: functional tests."
 		// https://pages.nist.gov/ACVP/draft-celi-acvp-pbkdf.html#section-6.1
 		if group.Type != "AFT" {
@@ -88,8 +81,8 @@ func (p *pbkdf) Process(vectorSet []byte, m Transactable) (any, error) {
 		for _, test := range group.Tests {
 			test := test
 
-			if test.KeyLen < 1 {
-				return nil, fmt.Errorf("key length must be at least 1 in test case %d/%d", group.ID, test.ID)
+			if test.KeyLen < 8 {
+				return nil, fmt.Errorf("key length must be at least 8 bits in test case %d/%d", group.ID, test.ID)
 			}
 			keyLen := uint32le(test.KeyLen)
 
