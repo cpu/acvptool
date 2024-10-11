@@ -29,3 +29,6 @@ go.work.sum
 
 # Secret config :)
 /config.json
+
+# Build cmd
+/acvptool
