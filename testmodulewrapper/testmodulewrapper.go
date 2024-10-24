@@ -30,11 +30,12 @@ import (
 	"crypto/sha512"
 	"encoding/binary"
 	"errors"
-	"filippo.io/edwards25519"
 	"fmt"
 	"hash"
 	"io"
 	"os"
+
+	"filippo.io/edwards25519"
 
 	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/pbkdf2"
@@ -63,6 +64,12 @@ var handlers = map[string]func([][]byte) error{
 	"EDDSA/keyVer":             eddsaKeyVer,
 	"EDDSA/sigGen":             eddsaSigGen,
 	"EDDSA/sigVer":             eddsaSigVer,
+	"SHAKE-128":                shakeAftVot(sha3.NewShake128),
+	"SHAKE-128/VOT":            shakeAftVot(sha3.NewShake128),
+	"SHAKE-128/MCT":            shakeMct(sha3.NewShake128),
+	"SHAKE-256":                shakeAftVot(sha3.NewShake256),
+	"SHAKE-256/VOT":            shakeAftVot(sha3.NewShake256),
+	"SHAKE-256/MCT":            shakeMct(sha3.NewShake256),
 }
 
 func flush(args [][]byte) error {
@@ -218,9 +225,9 @@ func getConfig(args [][]byte) error {
 		}]
 	}, {
 		"algorithm": "EDDSA",
-        "mode": "keyVer",
-        "revision": "1.0", 
-        "curve": ["ED-25519"]
+		"mode": "keyVer",
+		"revision": "1.0",
+		"curve": ["ED-25519"]
     }, {
 		"algorithm": "EDDSA",
 		"mode": "sigVer",
@@ -228,6 +235,28 @@ func getConfig(args [][]byte) error {
 		"pure": true,
 		"preHash": true,
 		"curve": ["ED-25519"]}
+	}, {
+		"algorithm": "SHAKE-128",
+		"inBit": false,
+		"outBit": false,
+		"inEmpty": false,
+		"outputLen": [{
+			"min": 128,
+			"max": 4096,
+			"increment": 8
+		}],
+		"revision": "1.0"
+	}, {
+		"algorithm": "SHAKE-256",
+		"inBit": false,
+		"outBit": false,
+		"inEmpty": false,
+		"outputLen": [{
+			"min": 128,
+			"max": 4096,
+			"increment": 8
+		}],
+		"revision": "1.0"
 	}
 ]`)); err != nil {
 		return err
@@ -600,7 +629,6 @@ func eddsaKeyVer(args [][]byte) error {
 		return fmt.Errorf("unsupported EDDSA curve: %q", args[0])
 	}
 
-	// Verify the public key is the correct size.
 	if len(args[1]) != ed25519.PublicKeySize {
 		return reply([]byte{0})
 	}
@@ -623,6 +651,7 @@ func eddsaSigGen(args [][]byte) error {
 	sk := ed25519.NewKeyFromSeed(args[1])
 	msg := args[2]
 	prehash := args[3]
+	context := string(args[4])
 
 	var opts ed25519.Options
 	if prehash[0] == 1 {
@@ -630,7 +659,9 @@ func eddsaSigGen(args [][]byte) error {
 		h := sha512.New()
 		h.Write(msg)
 		msg = h.Sum(nil)
-		opts.Context = string(args[4])
+		// With ed25519 the context is only specified for sigGen tests when using prehashing.
+		// See https://pages.nist.gov/ACVP/draft-celi-acvp-eddsa.html#section-8.6
+		opts.Context = context
 	}
 
 	sig, err := sk.Sign(nil, msg, &opts)
@@ -643,7 +674,7 @@ func eddsaSigGen(args [][]byte) error {
 
 func eddsaSigVer(args [][]byte) error {
 	if string(args[0]) != "ED-25519" {
-		fmt.Errorf("unsupported EDDSA curve: %q", args[0])
+		return fmt.Errorf("unsupported EDDSA curve: %q", args[0])
 	}
 
 	msg := args[1]
@@ -657,6 +688,8 @@ func eddsaSigVer(args [][]byte) error {
 		h := sha512.New()
 		h.Write(msg)
 		msg = h.Sum(nil)
+		// Context is only specified for sigGen, not sigVer.
+		// See https://pages.nist.gov/ACVP/draft-celi-acvp-eddsa.html#section-8.6
 	}
 
 	if err := ed25519.VerifyWithOptions(pk, msg, sig, &opts); err != nil {
@@ -664,6 +697,68 @@ func eddsaSigVer(args [][]byte) error {
 	}
 
 	return reply([]byte{1})
+}
+
+func shakeAftVot(digestFn func() sha3.ShakeHash) func([][]byte) error {
+	return func(args [][]byte) error {
+		if len(args) != 2 {
+			return fmt.Errorf("shakeAftVot received %d args, wanted 2", len(args))
+		}
+
+		msg := args[0]
+		outLenBits := binary.LittleEndian.Uint32(args[1])
+
+		h := digestFn()
+		h.Write(msg)
+		digest := make([]byte, outLenBits/8)
+		h.Read(digest)
+
+		return reply(digest)
+	}
+}
+
+func shakeMct(digestFn func() sha3.ShakeHash) func([][]byte) error {
+	return func(args [][]byte) error {
+		if len(args) != 4 {
+			return fmt.Errorf("shakeMct received %d args, wanted 4", len(args))
+		}
+
+		seed := args[0]
+		minOutBytes := binary.LittleEndian.Uint32(args[1])
+		maxOutBytes := binary.LittleEndian.Uint32(args[2])
+		outputLenBytes := binary.LittleEndian.Uint32(args[3])
+		rangeBytes := maxOutBytes - minOutBytes + 1
+
+		md := make([][]byte, 1001)
+		md[0] = seed
+		msg := make([][]byte, 1001)
+
+		for i := 1; i < 1001; i++ {
+			// "The MSG[i] input to SHAKE MUST always contain at least 128 bits. If this is not the case
+			// as the previous digest was too short, append empty bits to the rightmost side of the digest."
+			boundary := min(len(md[i-1]), 16)
+			msg[i] = make([]byte, 16)
+			copy(msg[i], md[i-1][:boundary])
+
+			//  MD[i] = SHAKE(MSG[i], OutputLen * 8)
+			h := digestFn()
+			h.Reset()
+			h.Write(msg[i])
+			digest := make([]byte, outputLenBytes)
+			h.Read(digest)
+			md[i] = digest
+
+			// RightmostOutputBits = 16 rightmost bits of MD[i] as an integer
+			// OutputLen = minOutBytes + (RightmostOutputBits % Range)
+			rightmostOutputBits := uint32(md[i][outputLenBytes-2])<<8 | uint32(md[i][outputLenBytes-1])
+			outputLenBytes = minOutBytes + (rightmostOutputBits % rangeBytes)
+		}
+
+		outputLenBits := make([]byte, 4)
+		binary.LittleEndian.PutUint32(outputLenBits, outputLenBytes)
+
+		return reply(md[1000], outputLenBits)
+	}
 }
 
 const (
