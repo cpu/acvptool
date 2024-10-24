@@ -94,14 +94,18 @@ func (h *shake) Process(vectorSet []byte, m Transactable) (any, error) {
 				return nil, fmt.Errorf("failed to decode hex in test case %d/%d: %s", group.ID, test.ID, err)
 			}
 
+			if test.BitOutLength%8 != 0 {
+				return nil, fmt.Errorf("test case %d/%d has bit length %d - fractional bytes not supported", group.ID, test.ID, test.BitOutLength)
+			}
+
 			switch group.Type {
 			case "AFT":
 				// "AFTs all produce a single digest size, matching the security strength of the extendable output function."
 				if test.BitOutLength != uint32(h.size*8) {
-					return nil, fmt.Errorf("AFT test case %d/%d has bit length %d but expected %d", group.ID, test.ID, test.BitLength, h.size*8)
+					return nil, fmt.Errorf("AFT test case %d/%d has bit length %d but expected %d", group.ID, test.ID, test.BitOutLength, h.size*8)
 				}
 
-				m.TransactAsync(h.algo, 1, [][]byte{msg, uint32le(test.BitOutLength)}, func(result [][]byte) error {
+				m.TransactAsync(h.algo, 1, [][]byte{msg, uint32le(test.BitOutLength / 8)}, func(result [][]byte) error {
 					response.Tests = append(response.Tests, shakeTestResponse{
 						ID:        test.ID,
 						DigestHex: hex.EncodeToString(result[0]),
@@ -110,7 +114,7 @@ func (h *shake) Process(vectorSet []byte, m Transactable) (any, error) {
 				})
 			case "VOT":
 				// "The VOTs SHALL produce varying digest sizes based on the capabilities of the IUT"
-				m.TransactAsync(h.algo+"/VOT", 1, [][]byte{msg, uint32le(test.BitOutLength)}, func(result [][]byte) error {
+				m.TransactAsync(h.algo+"/VOT", 1, [][]byte{msg, uint32le(test.BitOutLength / 8)}, func(result [][]byte) error {
 					response.Tests = append(response.Tests, shakeTestResponse{
 						ID:        test.ID,
 						DigestHex: hex.EncodeToString(result[0]),
@@ -121,20 +125,27 @@ func (h *shake) Process(vectorSet []byte, m Transactable) (any, error) {
 				// https://pages.nist.gov/ACVP/draft-celi-acvp-sha3.html#name-shake-monte-carlo-test
 				testResponse := shakeTestResponse{ID: test.ID}
 
+				if group.MinOutLenBits%8 != 0 {
+					return nil, fmt.Errorf("MCT test group %d has min output length %d - fractional bytes not supported", group.ID, group.MinOutLenBits)
+				}
+				if group.MaxOutLenBits%8 != 0 {
+					return nil, fmt.Errorf("MCT test group %d has max output length %d - fractional bytes not supported", group.ID, group.MaxOutLenBits)
+				}
+
 				digest := msg
-				minOutLenBits := uint32le(group.MinOutLenBits)
-				maxOutLenBits := uint32le(group.MaxOutLenBits)
-				outputLenBits := uint32le(group.MaxOutLenBits)
+				minOutLenBytes := uint32le(group.MinOutLenBits / 8)
+				maxOutLenBytes := uint32le(group.MaxOutLenBits / 8)
+				outputLenBytes := uint32le(group.MaxOutLenBits / 8)
 
 				for i := 0; i < 100; i++ {
-					args := [][]byte{digest, minOutLenBits, maxOutLenBits, outputLenBits}
+					args := [][]byte{digest, minOutLenBytes, maxOutLenBytes, outputLenBytes}
 					result, err := m.Transact(h.algo+"/MCT", 2, args...)
 					if err != nil {
 						panic(h.algo + " mct operation failed: " + err.Error())
 					}
 
 					digest = result[0]
-					outputLenBits = uint32le(binary.LittleEndian.Uint32(result[1]))
+					outputLenBytes = uint32le(binary.LittleEndian.Uint32(result[1]))
 					mctResult := shakeMCTResult{DigestHex: hex.EncodeToString(digest), OutputLen: uint32(len(digest) * 8)}
 					testResponse.MCTResults = append(testResponse.MCTResults, mctResult)
 				}
