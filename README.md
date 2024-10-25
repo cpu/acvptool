@@ -112,9 +112,12 @@ The other commands are as follows. (Note that you only need to implement the com
 | SHA3-256             | Value to hash             | Digest  |
 | SHA3-384             | Value to hash             | Digest  |
 | SHA3-512             | Value to hash             | Digest  |
-| SHAKE                | Value to hash             | Digest  |
-| SHAKE/VOT            | Value to hash, output length bits | Digest |
-| SHAKE/MCT            | Initial seed¹, min output bits, max output bits, output length bits | Digest, output length bits |
+| SHAKE-128            | Value to hash, output length bytes | Digest |
+| SHAKE-128/VOT        | Value to hash, output length bytes | Digest |
+| SHAKE-128/MCT        | Initial seed¹, min output bytes, max output bytes, output length bytes | Digest, output length bytes |
+| SHAKE-256            | Value to hash, output length bytes | Digest |
+| SHAKE-256/VOT        | Value to hash, output length bytes | Digest |
+| SHAKE-256/MCT        | Initial seed¹, min output bytes, max output bytes, output length bytes | Digest, output length bytes |
 | SHA-1/MCT            | Initial seed¹             | Digest  |
 | SHA2-224/MCT         | Initial seed¹             | Digest  |
 | SHA2-256/MCT         | Initial seed¹             | Digest  |
