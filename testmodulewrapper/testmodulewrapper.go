@@ -706,11 +706,11 @@ func shakeAftVot(digestFn func() sha3.ShakeHash) func([][]byte) error {
 		}
 
 		msg := args[0]
-		outLenBits := binary.LittleEndian.Uint32(args[1])
+		outLenBytes := binary.LittleEndian.Uint32(args[1])
 
 		h := digestFn()
 		h.Write(msg)
-		digest := make([]byte, outLenBits/8)
+		digest := make([]byte, outLenBytes)
 		h.Read(digest)
 
 		return reply(digest)
@@ -723,41 +723,45 @@ func shakeMct(digestFn func() sha3.ShakeHash) func([][]byte) error {
 			return fmt.Errorf("shakeMct received %d args, wanted 4", len(args))
 		}
 
-		seed := args[0]
+		md := args[0]
 		minOutBytes := binary.LittleEndian.Uint32(args[1])
 		maxOutBytes := binary.LittleEndian.Uint32(args[2])
+
 		outputLenBytes := binary.LittleEndian.Uint32(args[3])
+		if outputLenBytes < 2 {
+			return fmt.Errorf("invalid output length: %d", outputLenBytes)
+		}
+
+		if maxOutBytes < minOutBytes {
+			return fmt.Errorf("invalid maxOutBytes and minOutBytes: %d, %d", maxOutBytes, minOutBytes)
+		}
+
 		rangeBytes := maxOutBytes - minOutBytes + 1
 
-		md := make([][]byte, 1001)
-		md[0] = seed
-		msg := make([][]byte, 1001)
-
-		for i := 1; i < 1001; i++ {
+		for i := 0; i < 1000; i++ {
 			// "The MSG[i] input to SHAKE MUST always contain at least 128 bits. If this is not the case
 			// as the previous digest was too short, append empty bits to the rightmost side of the digest."
-			boundary := min(len(md[i-1]), 16)
-			msg[i] = make([]byte, 16)
-			copy(msg[i], md[i-1][:boundary])
+			boundary := min(len(md), 16)
+			msg := make([]byte, 16)
+			copy(msg, md[:boundary])
 
 			//  MD[i] = SHAKE(MSG[i], OutputLen * 8)
 			h := digestFn()
-			h.Reset()
-			h.Write(msg[i])
+			h.Write(msg)
 			digest := make([]byte, outputLenBytes)
 			h.Read(digest)
-			md[i] = digest
+			md = digest
 
 			// RightmostOutputBits = 16 rightmost bits of MD[i] as an integer
 			// OutputLen = minOutBytes + (RightmostOutputBits % Range)
-			rightmostOutputBits := uint32(md[i][outputLenBytes-2])<<8 | uint32(md[i][outputLenBytes-1])
-			outputLenBytes = minOutBytes + (rightmostOutputBits % rangeBytes)
+			rightmostOutput := uint32(md[outputLenBytes-2])<<8 | uint32(md[outputLenBytes-1])
+			outputLenBytes = minOutBytes + (rightmostOutput % rangeBytes)
 		}
 
-		outputLenBits := make([]byte, 4)
-		binary.LittleEndian.PutUint32(outputLenBits, outputLenBytes)
+		encodedOutputLenBytes := make([]byte, 4)
+		binary.LittleEndian.PutUint32(encodedOutputLenBytes, outputLenBytes)
 
-		return reply(md[1000], outputLenBits)
+		return reply(md, encodedOutputLenBytes)
 	}
 }
 
