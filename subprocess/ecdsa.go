@@ -25,8 +25,9 @@ import (
 // https://pages.nist.gov/ACVP/draft-fussell-acvp-ecdsa.html#name-test-vectors
 
 type ecdsaTestVectorSet struct {
-	Groups []ecdsaTestGroup `json:"testGroups"`
-	Mode   string           `json:"mode"`
+	Groups    []ecdsaTestGroup `json:"testGroups"`
+	Mode      string           `json:"mode"`
+	Algorithm string           `json:"algorithm"`
 }
 
 type ecdsaTestGroup struct {
@@ -76,6 +77,10 @@ func (e *ecdsa) Process(vectorSet []byte, m Transactable) (any, error) {
 	var parsed ecdsaTestVectorSet
 	if err := json.Unmarshal(vectorSet, &parsed); err != nil {
 		return nil, err
+	}
+
+	if parsed.Algorithm == "DetECDSA" && parsed.Mode != "sigGen" {
+		return nil, fmt.Errorf("DetECDSA only specifies sigGen mode")
 	}
 
 	var ret []ecdsaTestGroupResponse
@@ -139,6 +144,10 @@ func (e *ecdsa) Process(vectorSet []byte, m Transactable) (any, error) {
 				})
 
 			case "sigGen":
+				if group.ComponentTest && parsed.Algorithm == "DetECDSA" {
+					return nil, fmt.Errorf("DetECDSA does not support component tests")
+				}
+
 				p := e.primitives[group.HashAlgo]
 				h, ok := p.(*hashPrimitive)
 				if !ok {
