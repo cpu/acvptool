@@ -268,9 +268,10 @@ func processFile(filename string, supportedAlgos []map[string]any, middle Middle
 		}
 
 		group := map[string]any{
-			"vsId":       commonFields.ID,
-			"testGroups": replyGroups,
-			"algorithm":  algo,
+			"vsId":         commonFields.ID,
+			"showExpected": true,
+			"testGroups":   replyGroups,
+			"algorithm":    algo,
 		}
 		replyBytes, err := json.MarshalIndent(group, "", "    ")
 		if err != nil {
@@ -452,8 +453,48 @@ FetchResults:
 		}
 
 		log.Printf("Server did not accept results: %#v", results)
+		if err := getValidationResultsWithRetry(server, results); err != nil {
+			return false, err
+		}
+
 		return false, nil
 	}
+}
+
+func getValidationResultsWithRetry(server *acvp.Server, results acvp.SessionResults) error {
+	for _, result := range results.Results {
+		path := fmt.Sprintf("%s/results", trimLeadingSlash(result.URL))
+
+		var validationResults acvp.ValidationResults
+		for {
+			if err := server.Get(&validationResults, path); err != nil {
+				return errors.New("failed to get validation results" + err.Error())
+			}
+
+			if validationResults.Retry != 0 {
+				log.Print("Server hasn't finished processing validation results. Waiting 10 seconds.")
+				time.Sleep(10 * time.Second)
+				continue
+			}
+
+			break
+		}
+
+		log.Printf("vsID %d disposition: %s\n", validationResults.ID, validationResults.Disposition)
+		for _, t := range validationResults.Tests {
+			if t.Result == "passed" {
+				continue
+			}
+
+			providedJson, _ := json.MarshalIndent(t.Provided, " ", " ")
+			expectedJson, _ := json.MarshalIndent(t.Expected, " ", " ")
+			log.Printf("tcID %d result: %s reason: %s\n", t.ID, t.Result, t.Reason)
+			log.Printf("tcID %d provided: %s\n", t.ID, providedJson)
+			log.Printf("tdID %d expected: %s\n", t.ID, expectedJson)
+		}
+	}
+	
+	return nil
 }
 
 // vectorSetHeader is the first element in the array of JSON elements that makes
