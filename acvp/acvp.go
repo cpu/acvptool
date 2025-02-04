@@ -660,3 +660,16 @@ type SessionResults struct {
 		Status string `json:"status"`
 	} `json:"results"`
 }
+
+type ValidationResults struct {
+	Retry       uint64 `json:"retry,omitempty"`
+	ID          uint64 `json:"vsId"`
+	Disposition string `json:"disposition"`
+	Tests       []struct {
+		ID       uint64         `json:"tcId"`
+		Result   string         `json:"result"`
+		Reason   string         `json:"reason"`
+		Expected map[string]any `json:"expected,omitempty"`
+		Provided map[string]any `json:"provided,omitempty"`
+	} `json:"tests"`
+}
